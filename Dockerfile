@@ -1,24 +1,18 @@
-FROM ubuntu:20.04
+FROM ubuntu:22.04
 LABEL maintainer="Stefan Pielmeier <stefan@symlinux.com>"
-LABEL version 0.2
-LABEL description="Docker image for bugzilla on Ubuntu 20.04 using PerlCGI/Apache2"
+LABEL version="0.3"
+LABEL description="Docker image for bugzilla on Ubuntu 22.04 using PerlCGI/Apache2"
 
-ENV bugzilla_branch=release-5.0-stable
-ENV APACHE_USER=www-data
+# Environment variables
+ENV BUGZILLA_BRANCH=release-5.0-stable \
+    APACHE_USER=www-data \
+    DEBIAN_FRONTEND=noninteractive
 
-# disable prompt during package install
-ARG DEBIAN_FRONTEND=noninteractive
+WORKDIR /var/www/html
 
-##################
-##   BUILDING   ##
-##################
-
-WORKDIR /
-
-# Prerequisites
-RUN apt update
-RUN apt-get upgrade -y
-RUN apt-get install -y \
+# Install required packages
+RUN apt-get update && apt-get upgrade -y && \
+    apt-get install -y --no-install-recommends \
       vim \
       bash \
       supervisor \
@@ -30,7 +24,6 @@ RUN apt-get install -y \
       libdatetime-timezone-perl \
       libdatetime-perl \
       libemail-sender-perl \
-      libemail-mime-perl \
       libemail-mime-perl \
       libdbi-perl \
       libdbd-mysql-perl \
@@ -72,44 +65,55 @@ RUN apt-get install -y \
       libemail-reply-perl \
       apache2 \
       postfix \
-      git
-RUN rm -rf /var/lib/apt/lists/*
-RUN apt clean
+      git \
+      cpanminus \
+      libdbix-connector-perl \
+      libjson-xs-perl \
+      make && \
+    rm -rf /var/lib/apt/lists/*
 
-# prepare the entrypoint script just to start the supervisord
-ADD entrypoint.sh /entrypoint.sh
-RUN chmod 700 /entrypoint.sh
-ADD supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-RUN chmod 700 /etc/supervisor/conf.d/supervisord.conf
+# Configure Apache modules
+RUN a2enmod cgid rewrite headers expires
 
-# for apache2 web server
-EXPOSE 80
-RUN a2enmod cgid && a2enmod rewrite && a2enmod headers && a2enmod expires
-ADD bugzilla.conf /etc/apache2/conf-available
+# Copy configuration files
+COPY bugzilla.conf /etc/apache2/conf-available/
+COPY entrypoint.sh /entrypoint.sh
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY perl_patch /tmp/perl_patch
+
+# Set appropriate permissions for files
+RUN chmod 755 /entrypoint.sh && \
+    chmod 644 /etc/supervisor/conf.d/supervisord.conf
+
+# Enable Bugzilla configuration in Apache
 RUN a2enconf bugzilla
 
+# Clone Bugzilla repository
+RUN git clone --branch ${BUGZILLA_BRANCH} https://github.com/bugzilla/bugzilla /var/www/html/bugzilla
 
-# install bugzilla following https://bugzilla.readthedocs.io/en/5.0/installing/linux.html
-WORKDIR /var/www/html
-RUN git clone --branch ${bugzilla_branch} https://github.com/bugzilla/bugzilla
-RUN perl -MCPAN -e "install CPAN"
+# Install necessary Perl modules using cpanm
+RUN cpanm DBIx::Connector Template Email::Sender Email::Address::XS JSON::XS PatchReader XMLRPC::Lite && \
+    # Find the correct path for Safe.pm in Ubuntu 22.04
+    SAFE_PM_PATH=$(find /usr/share/perl -name "Safe.pm") && \
+    if [ -n "$SAFE_PM_PATH" ]; then \
+      patch -u $SAFE_PM_PATH -i /tmp/perl_patch || true; \
+    else \
+      echo "Safe.pm not found"; \
+      exit 1; \
+    fi
 
-# ensure bugzilla installation and Perl is all right, this may take some time
+# Configure Bugzilla
 WORKDIR /var/www/html/bugzilla
-RUN ./checksetup.pl --check-modules # generates a perl module check
-RUN ./install-module.pl --all  # installes missing perl modules
-ADD perl_patch /tmp/perl_patch
-# needed to fix Perl5 issue #17271,
-# see https://stackoverflow.com/questions/56475712/getting-undefined-subroutine-utf8swashnew-called-at-bugzilla-util-pm-line-109
-RUN patch -u /usr/share/perl/5.30.0/Safe.pm -i /tmp/perl_patch 
-# now we can continue with normal setup
-RUN ./checksetup.pl  # generates localconfig file
+RUN ./checksetup.pl && \
+    chown -R ${APACHE_USER}:${APACHE_USER} /var/www/html/bugzilla && \
+    rm -f /tmp/perl_patch
 
-# make the images available for backup and restore
-VOLUME /var/www/html/bugzilla/images
-VOLUME /var/www/html/bugzilla/data 
-VOLUME /var/www/html/bugzilla/lib
+# Define volumes for persistent data
+VOLUME ["/var/www/html/bugzilla/images", "/var/www/html/bugzilla/data", "/var/www/html/bugzilla/lib"]
 
-# start the supervisord
-WORKDIR /tmp
-CMD ["/entrypoint.sh"]
+# Expose port for apache2
+EXPOSE 80
+
+# Set working directory and entrypoint
+WORKDIR /var/www/html
+ENTRYPOINT ["/entrypoint.sh"]

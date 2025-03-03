@@ -1,0 +1,40 @@
+version: '3'
+
+services:
+  bugzilla:
+    image: bugzilla
+    ports:
+      - "80:80"
+    environment:
+      BUGZILLA_DB_HOST: db
+      BUGZILLA_DB_NAME: bugzilla
+      BUGZILLA_DB_USER: bugzilla_user
+      BUGZILLA_DB_PASS: secure_password
+      BUGZILLA_ADMIN_EMAIL: admin@example.com
+      BUGZILLA_ADMIN_PASS: admin_password
+      BUGZILLA_ADMIN_REALNAME: Bugzilla Administrator
+      POSTFIX_HOSTNAME: mail.example.com
+      POSTFIX_NETWORKS: "127.0.0.0/8"
+      SERVERNAME: "http://localhost"
+    volumes:
+      - bugzilla-data:/var/www/html/bugzilla/data
+      - bugzilla-images:/var/www/html/bugzilla/images
+      - bugzilla-lib:/var/www/html/bugzilla/lib
+    depends_on:
+      - db
+
+  db:
+    image: mysql:8
+    environment:
+      MYSQL_ROOT_PASSWORD: root_password
+      MYSQL_DATABASE: bugzilla
+      MYSQL_USER: bugzilla_user
+      MYSQL_PASSWORD: secure_password
+    volumes:
+      - mysql-data:/var/lib/mysql
+
+volumes:
+  bugzilla-data:
+  bugzilla-images:
+  bugzilla-lib:
+  mysql-data:
